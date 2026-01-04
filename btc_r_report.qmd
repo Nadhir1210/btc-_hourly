@@ -1,0 +1,317 @@
+---
+title: "BTC Hourly Close — Task 1 (Distribution) & Task 2 (Dry/Wet Years)"
+author: "Nadhir Benhalima"
+format: html
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+This report reproduces the analysis directly in **R**.
+
+- Dataset: `data/btc_hourly_ohclv_ta.csv` (fallback: `btc_hourly_ohclv_ta.csv`)
+- Time column: `DATETIME`
+- Variable of interest: `Q = CLOSE`
+
+## Setup + data load
+
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(lubridate)
+  library(MASS)
+})
+
+# --- Data path (prefer data/, fallback to root)
+candidates <- c('data/btc_hourly_ohclv_ta.csv', 'btc_hourly_ohclv_ta.csv')
+data_path <- candidates[file.exists(candidates)][1]
+if (is.na(data_path)) stop('Could not find BTC CSV. Tried: ', paste(candidates, collapse = ', '))
+message('Using: ', data_path)
+
+# Load
+raw <- readr::read_csv(data_path, show_col_types = FALSE)
+
+# Parse datetime and define Q
+df <- raw %>%
+  mutate(
+    DATETIME = ymd_hms(DATETIME, quiet = TRUE),
+    Q = as.numeric(CLOSE)
+  ) %>%
+  filter(!is.na(DATETIME), !is.na(Q)) %>%
+  arrange(DATETIME)
+
+message('Rows: ', nrow(df), ' Cols: ', ncol(df))
+message('Datetime range: ', min(df$DATETIME), ' -> ', max(df$DATETIME))
+df %>% dplyr::select(DATETIME, Q) %>% head()
+```
+
+## Helper functions
+
+```{r}
+ecdf_xy <- function(x) {
+  x <- x[is.finite(x)]
+  x <- sort(x)
+  y <- seq_along(x) / length(x)
+  list(x = x, y = y)
+}
+
+aic_ <- function(ll, k) 2 * k - 2 * ll
+bic_ <- function(ll, k, n) k * log(n) - 2 * ll
+
+skewness_simple <- function(x) {
+  x <- x[is.finite(x)]
+  m <- mean(x)
+  s <- sd(x)
+  if (!is.finite(s) || s == 0) return(NA_real_)
+  mean(((x - m) / s)^3)
+}
+
+excess_kurtosis_simple <- function(x) {
+  x <- x[is.finite(x)]
+  m <- mean(x)
+  s <- sd(x)
+  if (!is.finite(s) || s == 0) return(NA_real_)
+  mean(((x - m) / s)^4) - 3
+}
+
+summarize_series <- function(x) {
+  x <- x[is.finite(x)]
+  p <- as.numeric(stats::quantile(x, probs = c(0.01, 0.05, 0.25, 0.75, 0.95, 0.99), names = FALSE))
+  tibble(
+    n = length(x),
+    min = min(x),
+    max = max(x),
+    mean = mean(x),
+    median = median(x),
+    sd = sd(x),
+    skew = skewness_simple(x),
+    excess_kurtosis = excess_kurtosis_simple(x),
+    p01 = p[1],
+    p05 = p[2],
+    p25 = p[3],
+    p75 = p[4],
+    p95 = p[5],
+    p99 = p[6]
+  )
+}
+
+fit_norm <- function(x) {
+  x <- x[is.finite(x)]
+  mu <- mean(x)
+  sigma <- sd(x)
+  ll <- sum(dnorm(x, mean = mu, sd = sigma, log = TRUE))
+  list(distribution = 'norm', params = list(mean = mu, sd = sigma), ll = ll, k = 2, n = length(x))
+}
+
+fit_lognorm <- function(x) {
+  x <- x[is.finite(x) & x > 0]
+  fit <- MASS::fitdistr(x, densfun = 'lognormal')
+  ll <- as.numeric(logLik(fit))
+  list(distribution = 'lognorm', params = as.list(fit$estimate), ll = ll, k = 2, n = length(x))
+}
+
+fit_gamma <- function(x) {
+  x <- x[is.finite(x) & x > 0]
+  fit <- tryCatch(
+    MASS::fitdistr(x, densfun = 'gamma'),
+    error = function(e) NULL
+  )
+
+  if (!is.null(fit)) {
+    ll <- as.numeric(logLik(fit))
+    return(list(distribution = 'gamma', params = as.list(fit$estimate), ll = ll, k = 2, n = length(x)))
+  }
+
+  # Fallback: method-of-moments for Gamma(shape, rate)
+  m <- mean(x)
+  v <- stats::var(x)
+  if (!is.finite(m) || !is.finite(v) || v <= 0) {
+    return(list(distribution = 'gamma', params = list(shape = NA_real_, rate = NA_real_), ll = NA_real_, k = 2, n = length(x)))
+  }
+  shape <- (m^2) / v
+  rate <- m / v
+  ll <- sum(dgamma(x, shape = shape, rate = rate, log = TRUE))
+  list(distribution = 'gamma', params = list(shape = shape, rate = rate), ll = ll, k = 2, n = length(x))
+}
+
+ks_pvalue <- function(x, dist, params) {
+  x <- x[is.finite(x)]
+  out <- tryCatch({
+    if (dist == 'norm') {
+      stats::ks.test(x, 'pnorm', mean = params$mean, sd = params$sd)$p.value
+    } else if (dist == 'lognorm') {
+      stats::ks.test(x, 'plnorm', meanlog = params$meanlog, sdlog = params$sdlog)$p.value
+    } else if (dist == 'gamma') {
+      stats::ks.test(x, 'pgamma', shape = params$shape, rate = params$rate)$p.value
+    } else {
+      NA_real_
+    }
+  }, error = function(e) NA_real_)
+  as.numeric(out)
+}
+```
+
+## Task 1 — Distribution (Q = CLOSE)
+
+```{r}
+Q <- df$Q
+Q <- Q[is.finite(Q)]
+Q_pos <- Q[Q > 0]
+
+stats_table <- summarize_series(Q)
+stats_table
+```
+
+```{r}
+fits <- list(
+  fit_norm(Q),
+  fit_lognorm(Q_pos),
+  fit_gamma(Q_pos)
+)
+
+comparison <- purrr::map_dfr(fits, function(f) {
+  tibble(
+    distribution = f$distribution,
+    n_used = f$n,
+    loglik = f$ll,
+    AIC = aic_(f$ll, f$k),
+    BIC = bic_(f$ll, f$k, f$n),
+    KS_p = ks_pvalue(if (f$distribution == 'norm') Q else Q_pos, f$distribution, f$params)
+  )
+}) %>% arrange(AIC, BIC)
+
+comparison
+```
+
+```{r}
+# --- Task 1 plots (4)
+fits_named <- purrr::set_names(fits, purrr::map_chr(fits, 'distribution'))
+
+# 1) Histogram + fitted PDFs
+p1 <- ggplot(tibble(Q = Q_pos), aes(Q)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 120, fill = 'steelblue', alpha = 0.35) +
+  stat_function(fun = dlnorm, args = fits_named$lognorm$params, linewidth = 1, colour = 'orange') +
+  stat_function(fun = dgamma, args = fits_named$gamma$params, linewidth = 1, colour = 'green4') +
+  stat_function(fun = dnorm, args = fits_named$norm$params, linewidth = 1, colour = 'red') +
+  labs(title = 'Histogram + fitted PDFs', x = 'Q (CLOSE)', y = 'Density')
+
+# 2) ECDF + fitted CDFs
+xgrid <- seq(min(Q_pos), max(Q_pos), length.out = 2000)
+ec_vals <- tibble(x = xgrid, ecdf = ecdf(Q_pos)(xgrid))
+
+cdf_vals <- tibble(
+  x = xgrid,
+  lognorm = plnorm(xgrid, meanlog = fits_named$lognorm$params$meanlog, sdlog = fits_named$lognorm$params$sdlog),
+  gamma = pgamma(xgrid, shape = fits_named$gamma$params$shape, rate = fits_named$gamma$params$rate),
+  norm = pnorm(xgrid, mean = fits_named$norm$params$mean, sd = fits_named$norm$params$sd)
+)
+
+p2 <- ggplot() +
+  geom_step(data = ec_vals, aes(x, ecdf), linewidth = 1, colour = 'black') +
+  geom_line(data = cdf_vals, aes(x, lognorm), linewidth = 1, colour = 'orange') +
+  geom_line(data = cdf_vals, aes(x, gamma), linewidth = 1, colour = 'green4') +
+  geom_line(data = cdf_vals, aes(x, norm), linewidth = 1, colour = 'red') +
+  labs(title = 'ECDF + fitted CDFs', x = 'Q (CLOSE)', y = 'F(Q)')
+
+# 3) QQ plot: log(Q) vs Normal
+logQ <- log(Q_pos)
+qq <- qqnorm(logQ, plot.it = FALSE)
+qq_df <- tibble(theoretical = qq$x, ordered = qq$y)
+
+p3 <- ggplot(qq_df, aes(theoretical, ordered)) +
+  geom_point(size = 0.8, alpha = 0.7) +
+  geom_abline(intercept = mean(logQ), slope = sd(logQ), colour = 'red') +
+  labs(title = 'QQ plot: log(Q) vs Normal', x = 'Theoretical quantiles', y = 'Ordered values')
+
+# 4) Density with log10 x-scale
+p4 <- ggplot(tibble(Q = Q_pos), aes(Q)) +
+  geom_density(linewidth = 1, colour = 'steelblue') +
+  scale_x_log10() +
+  labs(title = 'Density with log10 x-scale', x = 'Q (log scale)', y = 'Density')
+
+p1
+p2
+p3
+p4
+```
+
+## Task 2 — Dry & Wet Years
+
+```{r}
+d <- df %>% mutate(YEAR = year(DATETIME), MONTH = month(DATETIME))
+
+annual <- d %>%
+  group_by(YEAR) %>%
+  summarise(mean_Q = mean(Q), n = n(), .groups = 'drop') %>%
+  arrange(mean_Q)
+
+selected_dry <- annual %>% slice_head(n = 2) %>% mutate(label = 'dry')
+selected_wet <- annual %>% slice_tail(n = 2) %>% mutate(label = 'wet')
+selected <- bind_rows(selected_dry, selected_wet) %>% arrange(label, mean_Q)
+selected_years <- selected$YEAR
+
+selected
+```
+
+```{r}
+annual %>% head(10)
+```
+
+```{r}
+sel <- d %>% filter(YEAR %in% selected_years)
+
+seasonal_signature <- sel %>%
+  group_by(YEAR, MONTH) %>%
+  summarise(
+    mean_Q = mean(Q),
+    median_Q = median(Q),
+    q25 = quantile(Q, 0.25),
+    q75 = quantile(Q, 0.75),
+    n = n(),
+    .groups = 'drop'
+  )
+
+seasonal_signature %>% head(12)
+```
+
+```{r}
+# --- Task 2 plots (4)
+
+# 1) Time series (faceted by year)
+p5 <- ggplot(sel, aes(DATETIME, Q)) +
+  geom_line(linewidth = 0.3) +
+  facet_wrap(~ YEAR, scales = 'free_x', ncol = 2) +
+  labs(title = 'Time series of Q (selected years)', x = 'Date', y = 'Q')
+
+# 2) Annual cumulative sum within year
+cum_df <- sel %>% arrange(YEAR, DATETIME) %>% group_by(YEAR) %>% mutate(cum_Q = cumsum(Q)) %>% ungroup()
+p6 <- ggplot(cum_df, aes(DATETIME, cum_Q, colour = factor(YEAR))) +
+  geom_line(linewidth = 0.6) +
+  labs(title = 'Annual cumulative sum of Q', x = 'Date', y = 'Cumulative Q', colour = 'Year')
+
+# 3) Monthly boxplots
+p7 <- ggplot(sel, aes(factor(MONTH), Q, fill = factor(YEAR))) +
+  geom_boxplot(outlier.shape = NA) +
+  labs(title = 'Monthly distribution of Q (selected years)', x = 'Month', y = 'Q', fill = 'Year')
+
+# 4) Monthly mean lines
+monthly_means <- sel %>% group_by(YEAR, MONTH) %>% summarise(mean_Q = mean(Q), .groups = 'drop')
+p8 <- ggplot(monthly_means, aes(MONTH, mean_Q, colour = factor(YEAR))) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  scale_x_continuous(breaks = 1:12) +
+  labs(title = 'Monthly mean of Q (selected years)', x = 'Month', y = 'Mean Q', colour = 'Year')
+
+p5
+p6
+p7
+p8
+```
+
+## Run locally
+
+From the project folder:
+
+- Preview (auto-reload): `quarto preview btc_r_report.qmd`
+- Render once: `quarto render btc_r_report.qmd`
