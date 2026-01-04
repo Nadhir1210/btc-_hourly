@@ -12,7 +12,7 @@ params:
   out_dir: "outputs"
 ---
 
-```{r}
+```{r setup_load_outputs}
 suppressPackageStartupMessages({
   library(tidyverse)
   library(lubridate)
@@ -86,7 +86,7 @@ In addition, the file contains precomputed technical indicators and derived feat
 
 #### Statistical parameters
 
-```{r}
+```{r task1_table_stats}
 task1_stats %>%
   select(n, start, end, min, q25, median, mean, geom_mean, q75, max) %>%
   kable(digits = 3)
@@ -94,7 +94,7 @@ task1_stats %>%
 
 #### Plots (already generated)
 
-```{r}
+```{r task1_plots}
 knitr::include_graphics(file.path(out, "task1_plot1_hist_density_raw.png"))
 knitr::include_graphics(file.path(out, "task1_plot2_ecdf_raw.png"))
 knitr::include_graphics(file.path(out, "task1_plot3_qq_logQ.png"))
@@ -103,7 +103,7 @@ knitr::include_graphics(file.path(out, "task1_plot4_density_logx.png"))
 
 #### Compare distribution models (positive-value fits)
 
-```{r}
+```{r task1_table_model_compare}
 task1_cmp %>%
   arrange(AIC) %>%
   kable(digits = 2)
@@ -121,25 +121,25 @@ Optional: estimate 100-year flood via right one-sided 1% prediction interval, ba
 
 #### Selected years
 
-```{r}
+```{r task2_table_selected_years}
 task2_years %>% kable()
 ```
 
 #### Annual summary
 
-```{r}
+```{r task2_table_annual_summary}
 task2_annual %>% kable(digits = 3)
 ```
 
 #### Seasonal signature
 
-```{r}
+```{r task2_table_seasonal_signature}
 task2_sig %>% kable(digits = 3)
 ```
 
 #### Plots (already generated)
 
-```{r}
+```{r task2_plots}
 knitr::include_graphics(file.path(out, "task2_plot1_timeseries_selected_years.png"))
 knitr::include_graphics(file.path(out, "task2_plot2_cumulative_selected_years.png"))
 knitr::include_graphics(file.path(out, "task2_plot3_monthly_boxplots.png"))
@@ -151,6 +151,16 @@ knitr::include_graphics(file.path(out, "task2_plot4_monthly_means.png"))
 Connect the statistical parameters and figures, justify the preferred transformation/model, and discuss the chosen dry/wet years and their seasonal characteristics.
 
 Include 2–3 literature references (author–year style).
+
+## Appendix — Full BTC report (embedded)
+
+This section embeds the full BTC Quarto report generated from [btc_r_report.qmd](btc_r_report.qmd).
+
+::: {=html}
+<iframe src="btc_r_report.html" style="width: 100%; height: 1100px; border: 1px solid #ddd;"></iframe>
+:::
+
+If the embed does not display in your browser, open the full report directly: [btc_r_report.html](btc_r_report.html).
 
 ## References
 
