@@ -16,7 +16,7 @@ This report reproduces the analysis directly in **R**.
 
 ## Setup + data load
 
-```{r}
+```{r setup_data_load}
 suppressPackageStartupMessages({
   library(tidyverse)
   library(lubridate)
@@ -48,7 +48,7 @@ df %>% dplyr::select(DATETIME, Q) %>% head()
 
 ## Helper functions
 
-```{r}
+```{r helpers}
 ecdf_xy <- function(x) {
   x <- x[is.finite(x)]
   x <- sort(x)
@@ -154,7 +154,9 @@ ks_pvalue <- function(x, dist, params) {
 
 ## Task 1 — Distribution (Q = CLOSE)
 
-```{r}
+### Task 1.1 — Prepare series + descriptive stats
+
+```{r task1_series_stats}
 Q <- df$Q
 Q <- Q[is.finite(Q)]
 Q_pos <- Q[Q > 0]
@@ -163,7 +165,9 @@ stats_table <- summarize_series(Q)
 stats_table
 ```
 
-```{r}
+### Task 1.2 — Fit + compare distributions
+
+```{r task1_fit_compare}
 fits <- list(
   fit_norm(Q),
   fit_lognorm(Q_pos),
@@ -184,19 +188,22 @@ comparison <- purrr::map_dfr(fits, function(f) {
 comparison
 ```
 
-```{r}
-# --- Task 1 plots (4)
+### Task 1.3 — Plot 1/4: Histogram + fitted PDFs
+
+```{r task1_plot_hist_pdfs}
 fits_named <- purrr::set_names(fits, purrr::map_chr(fits, 'distribution'))
 
-# 1) Histogram + fitted PDFs
-p1 <- ggplot(tibble(Q = Q_pos), aes(Q)) +
+ggplot(tibble(Q = Q_pos), aes(Q)) +
   geom_histogram(aes(y = after_stat(density)), bins = 120, fill = 'steelblue', alpha = 0.35) +
   stat_function(fun = dlnorm, args = fits_named$lognorm$params, linewidth = 1, colour = 'orange') +
   stat_function(fun = dgamma, args = fits_named$gamma$params, linewidth = 1, colour = 'green4') +
   stat_function(fun = dnorm, args = fits_named$norm$params, linewidth = 1, colour = 'red') +
   labs(title = 'Histogram + fitted PDFs', x = 'Q (CLOSE)', y = 'Density')
+```
 
-# 2) ECDF + fitted CDFs
+### Task 1.4 — Plot 2/4: ECDF + fitted CDFs
+
+```{r task1_plot_ecdf_cdfs}
 xgrid <- seq(min(Q_pos), max(Q_pos), length.out = 2000)
 ec_vals <- tibble(x = xgrid, ecdf = ecdf(Q_pos)(xgrid))
 
@@ -207,38 +214,41 @@ cdf_vals <- tibble(
   norm = pnorm(xgrid, mean = fits_named$norm$params$mean, sd = fits_named$norm$params$sd)
 )
 
-p2 <- ggplot() +
+ggplot() +
   geom_step(data = ec_vals, aes(x, ecdf), linewidth = 1, colour = 'black') +
   geom_line(data = cdf_vals, aes(x, lognorm), linewidth = 1, colour = 'orange') +
   geom_line(data = cdf_vals, aes(x, gamma), linewidth = 1, colour = 'green4') +
   geom_line(data = cdf_vals, aes(x, norm), linewidth = 1, colour = 'red') +
   labs(title = 'ECDF + fitted CDFs', x = 'Q (CLOSE)', y = 'F(Q)')
+```
 
-# 3) QQ plot: log(Q) vs Normal
+### Task 1.5 — Plot 3/4: QQ plot (log(Q) vs Normal)
+
+```{r task1_plot_qq_logq}
 logQ <- log(Q_pos)
 qq <- qqnorm(logQ, plot.it = FALSE)
 qq_df <- tibble(theoretical = qq$x, ordered = qq$y)
 
-p3 <- ggplot(qq_df, aes(theoretical, ordered)) +
+ggplot(qq_df, aes(theoretical, ordered)) +
   geom_point(size = 0.8, alpha = 0.7) +
   geom_abline(intercept = mean(logQ), slope = sd(logQ), colour = 'red') +
   labs(title = 'QQ plot: log(Q) vs Normal', x = 'Theoretical quantiles', y = 'Ordered values')
+```
 
-# 4) Density with log10 x-scale
-p4 <- ggplot(tibble(Q = Q_pos), aes(Q)) +
+### Task 1.6 — Plot 4/4: Density with log10 x-scale
+
+```{r task1_plot_density_log10}
+ggplot(tibble(Q = Q_pos), aes(Q)) +
   geom_density(linewidth = 1, colour = 'steelblue') +
   scale_x_log10() +
   labs(title = 'Density with log10 x-scale', x = 'Q (log scale)', y = 'Density')
-
-p1
-p2
-p3
-p4
 ```
 
 ## Task 2 — Dry & Wet Years
 
-```{r}
+### Task 2.1 — Select dry/wet years
+
+```{r task2_select_years}
 d <- df %>% mutate(YEAR = year(DATETIME), MONTH = month(DATETIME))
 
 annual <- d %>%
@@ -254,11 +264,15 @@ selected_years <- selected$YEAR
 selected
 ```
 
-```{r}
+### Task 2.2 — Annual table (preview)
+
+```{r task2_annual_preview}
 annual %>% head(10)
 ```
 
-```{r}
+### Task 2.3 — Seasonal signature (selected years)
+
+```{r task2_seasonal_signature}
 sel <- d %>% filter(YEAR %in% selected_years)
 
 seasonal_signature <- sel %>%
@@ -275,38 +289,43 @@ seasonal_signature <- sel %>%
 seasonal_signature %>% head(12)
 ```
 
-```{r}
-# --- Task 2 plots (4)
+### Task 2.4 — Plot 1/4: Time series (faceted)
 
-# 1) Time series (faceted by year)
-p5 <- ggplot(sel, aes(DATETIME, Q)) +
+```{r task2_plot_timeseries_faceted}
+ggplot(sel, aes(DATETIME, Q)) +
   geom_line(linewidth = 0.3) +
   facet_wrap(~ YEAR, scales = 'free_x', ncol = 2) +
   labs(title = 'Time series of Q (selected years)', x = 'Date', y = 'Q')
+```
 
-# 2) Annual cumulative sum within year
+### Task 2.5 — Plot 2/4: Annual cumulative sum
+
+```{r task2_plot_cumsum}
 cum_df <- sel %>% arrange(YEAR, DATETIME) %>% group_by(YEAR) %>% mutate(cum_Q = cumsum(Q)) %>% ungroup()
-p6 <- ggplot(cum_df, aes(DATETIME, cum_Q, colour = factor(YEAR))) +
+
+ggplot(cum_df, aes(DATETIME, cum_Q, colour = factor(YEAR))) +
   geom_line(linewidth = 0.6) +
   labs(title = 'Annual cumulative sum of Q', x = 'Date', y = 'Cumulative Q', colour = 'Year')
+```
 
-# 3) Monthly boxplots
-p7 <- ggplot(sel, aes(factor(MONTH), Q, fill = factor(YEAR))) +
+### Task 2.6 — Plot 3/4: Monthly boxplots
+
+```{r task2_plot_monthly_boxplots}
+ggplot(sel, aes(factor(MONTH), Q, fill = factor(YEAR))) +
   geom_boxplot(outlier.shape = NA) +
   labs(title = 'Monthly distribution of Q (selected years)', x = 'Month', y = 'Q', fill = 'Year')
+```
 
-# 4) Monthly mean lines
+### Task 2.7 — Plot 4/4: Monthly mean lines
+
+```{r task2_plot_monthly_means}
 monthly_means <- sel %>% group_by(YEAR, MONTH) %>% summarise(mean_Q = mean(Q), .groups = 'drop')
-p8 <- ggplot(monthly_means, aes(MONTH, mean_Q, colour = factor(YEAR))) +
+
+ggplot(monthly_means, aes(MONTH, mean_Q, colour = factor(YEAR))) +
   geom_line(linewidth = 0.8) +
   geom_point(size = 2) +
   scale_x_continuous(breaks = 1:12) +
   labs(title = 'Monthly mean of Q (selected years)', x = 'Month', y = 'Mean Q', colour = 'Year')
-
-p5
-p6
-p7
-p8
 ```
 
 ## Task 3 — Predict next-hour BTC price (R)
@@ -317,7 +336,7 @@ We predict the next-hour close price $Q_{t+1}$ using information available at ti
 - Features: lags + returns + technical indicators
 - Split: time-based (first 80% train, last 20% test)
 
-```{r}
+```{r task3_model_data_fit_metrics}
 model_df <- raw %>%
   mutate(
     DATETIME = ymd_hms(DATETIME, quiet = TRUE),
@@ -373,7 +392,7 @@ metrics <- tibble(
 metrics
 ```
 
-```{r}
+```{r task3_plot_last500}
 # Visual check: last N points of test
 N <- min(500, nrow(test))
 plot_df <- test %>%
@@ -386,7 +405,7 @@ ggplot(plot_df, aes(DATETIME, value, colour = series)) +
   labs(title = 'Next-hour prediction (last 500 test points)', x = 'Date', y = 'Price')
 ```
 
-```{r}
+```{r task3_plot_scatter_pred_vs_actual}
 # Scatter: predicted vs actual (test)
 ggplot(test, aes(y, pred_lm)) +
   geom_point(alpha = 0.25, size = 0.8) +
