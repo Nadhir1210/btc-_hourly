@@ -309,6 +309,91 @@ p7
 p8
 ```
 
+## Task 3 — Predict next-hour BTC price (R)
+
+We predict the next-hour close price $Q_{t+1}$ using information available at time $t$.
+
+- Target: `y = lead(Q, 1)`
+- Features: lags + returns + technical indicators
+- Split: time-based (first 80% train, last 20% test)
+
+```{r}
+model_df <- raw %>%
+  mutate(
+    DATETIME = ymd_hms(DATETIME, quiet = TRUE),
+    Q = as.numeric(CLOSE)
+  ) %>%
+  filter(!is.na(DATETIME), is.finite(Q)) %>%
+  arrange(DATETIME) %>%
+  mutate(
+    y = dplyr::lead(Q, 1),
+    lag1 = dplyr::lag(Q, 1),
+    lag24 = dplyr::lag(Q, 24),
+    ret1 = Q / dplyr::lag(Q, 1) - 1
+  ) %>%
+  dplyr::select(
+    DATETIME, Q, y,
+    lag1, lag24, ret1,
+    SMA_20, EMA_12, EMA_26,
+    MACD, MACD_SIGNAL, MACD_DIFF,
+    RSI, BB_WIDTH,
+    STOCH_K, STOCH_D,
+    MFI, ATR,
+    VOLATILITY_30D, PRICE_VOLATILITY_30D, HL_VOLATILITY_30D
+  ) %>%
+  drop_na()
+
+n_total <- nrow(model_df)
+train_n <- floor(0.80 * n_total)
+
+train <- model_df[1:train_n, ]
+test <- model_df[(train_n + 1):n_total, ]
+
+rmse <- function(y, yhat) sqrt(mean((yhat - y)^2))
+mae <- function(y, yhat) mean(abs(yhat - y))
+mape <- function(y, yhat) mean(abs((yhat - y) / y)) * 100
+
+# Baseline: persistence (yhat = Q_t)
+test$pred_naive <- test$Q
+
+# Linear model (simple and reproducible)
+fit_lm <- lm(
+  y ~ lag1 + lag24 + ret1 + SMA_20 + RSI + MACD + BB_WIDTH + ATR + VOLATILITY_30D,
+  data = train
+)
+test$pred_lm <- predict(fit_lm, newdata = test)
+
+metrics <- tibble(
+  model = c('naive_persistence', 'linear_regression'),
+  RMSE = c(rmse(test$y, test$pred_naive), rmse(test$y, test$pred_lm)),
+  MAE  = c(mae(test$y, test$pred_naive),  mae(test$y, test$pred_lm)),
+  MAPE = c(mape(test$y, test$pred_naive), mape(test$y, test$pred_lm))
+)
+
+metrics
+```
+
+```{r}
+# Visual check: last N points of test
+N <- min(500, nrow(test))
+plot_df <- test %>%
+  tail(N) %>%
+  dplyr::select(DATETIME, actual = y, pred_naive, pred_lm) %>%
+  pivot_longer(cols = c(actual, pred_naive, pred_lm), names_to = 'series', values_to = 'value')
+
+ggplot(plot_df, aes(DATETIME, value, colour = series)) +
+  geom_line(linewidth = 0.6) +
+  labs(title = 'Next-hour prediction (last 500 test points)', x = 'Date', y = 'Price')
+```
+
+```{r}
+# Scatter: predicted vs actual (test)
+ggplot(test, aes(y, pred_lm)) +
+  geom_point(alpha = 0.25, size = 0.8) +
+  geom_abline(intercept = 0, slope = 1, colour = 'red') +
+  labs(title = 'Linear model: Predicted vs Actual (test)', x = 'Actual y', y = 'Predicted y')
+```
+
 ## Run locally
 
 From the project folder:
