@@ -1,0 +1,653 @@
+---
+title: "📖 Bitcoin Hourly Data — Storytelling complet"
+author: "Analyse technique & visualisation"
+date: today
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    code-tools: true
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+  cache: false
+---
+
+# Introduction
+
+Ce document présente un storytelling complet des données Bitcoin horaires (`btc_hourly_ohclv_ta.csv`) à travers 7 actes : contexte, volatilité, volume, momentum, tendances, ratios et synthèse.
+
+## Setup : Packages & données
+
+```{r setup}
+#| label: setup
+#| include: true
+
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+# Packages nécessaires
+pkgs <- c("tidyverse", "lubridate", "TTR", "zoo", "patchwork", "DT", "scales", "knitr")
+missing <- setdiff(pkgs, rownames(installed.packages()))
+if (length(missing) > 0) install.packages(missing)
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(lubridate)
+  library(TTR)
+  library(zoo)
+  library(patchwork)
+  library(DT)
+  library(scales)
+  library(knitr)
+})
+
+knitr::opts_chunk$set(
+  fig.width = 10,
+  fig.height = 6,
+  dpi = 150
+)
+```
+
+```{r load-data}
+#| label: load-data
+
+# Lecture CSV
+csv_path <- "btc_hourly_ohclv_ta.csv"
+stopifnot(file.exists(csv_path))
+
+df <- read_csv(csv_path, show_col_types = FALSE)
+
+cat("Dataset chargé :", nrow(df), "lignes,", ncol(df), "colonnes\n")
+```
+
+## Prétraitement
+
+```{r preprocessing}
+#| label: preprocessing
+
+# Trouver les colonnes clés (insensible à la casse)
+cn <- names(df)
+cn_lc <- tolower(cn)
+find_col <- function(cands) {
+  i <- which(cn_lc %in% tolower(cands))
+  if (length(i) == 0) return(NA_integer_)
+  i[1]
+}
+
+idx_time   <- find_col(c("datetime","date","timestamp","time","open_time","close_time"))
+idx_open   <- find_col(c("open"))
+idx_high   <- find_col(c("high"))
+idx_low    <- find_col(c("low"))
+idx_close  <- find_col(c("close","close_price","closing_price"))
+idx_volume <- find_col(c("volume","vol","quote_volume"))
+
+dt <- as_tibble(df)
+if (!is.na(idx_time)) {
+  time_raw <- df[[idx_time]]
+  if (!inherits(time_raw, "POSIXct")) {
+    tt <- suppressWarnings(lubridate::ymd_hms(time_raw, tz = "UTC"))
+    if (all(is.na(tt))) tt <- suppressWarnings(lubridate::ymd_hm(time_raw, tz = "UTC"))
+    if (all(is.na(tt))) tt <- suppressWarnings(lubridate::parse_date_time(time_raw, orders = c("Ymd HMS","Ymd HM","Y-m-d H:M:S","dmy HMS","dmy HM","ymd"), tz = "UTC"))
+    time_parsed <- tt
+  } else {
+    time_parsed <- time_raw
+  }
+  dt <- dt %>% mutate(datetime = time_parsed)
+}
+if (!is.na(idx_open))   dt <- dt %>% mutate(open  = suppressWarnings(as.numeric(df[[idx_open]])))
+if (!is.na(idx_high))   dt <- dt %>% mutate(high  = suppressWarnings(as.numeric(df[[idx_high]])))
+if (!is.na(idx_low))    dt <- dt %>% mutate(low   = suppressWarnings(as.numeric(df[[idx_low]])))
+if (!is.na(idx_close))  dt <- dt %>% mutate(close = suppressWarnings(as.numeric(df[[idx_close]])))
+if (!is.na(idx_volume)) dt <- dt %>% mutate(volume = suppressWarnings(as.numeric(df[[idx_volume]])))
+
+if ("datetime" %in% names(dt)) dt <- dt %>% arrange(datetime)
+
+# Fenêtres
+window_short <- 20L
+window_fast  <- 12L
+window_slow  <- 26L
+window_sig   <- 9L
+window_vol30d <- 720L  # 30j * 24h
+
+# Returns (PRICE_CHANGE)
+if ("close" %in% names(dt)) {
+  dt <- dt %>% mutate(PRICE_CHANGE = close/lag(close) - 1)
+}
+
+# ATR (n=14)
+if (all(c("high","low","close") %in% names(dt))) {
+  atr_df <- TTR::ATR(cbind(dt$high, dt$low, dt$close), n = 14)
+  dt$ATR <- as.numeric(atr_df[,"atr"])
+}
+
+# RSI (n=14)
+if ("close" %in% names(dt)) {
+  dt$RSI <- as.numeric(TTR::RSI(dt$close, n = 14))
+}
+
+# SMA/EMA, MACD
+if ("close" %in% names(dt)) {
+  dt$SMA_20 <- as.numeric(TTR::SMA(dt$close, n = window_short))
+  dt$EMA_12 <- as.numeric(TTR::EMA(dt$close, n = window_fast))
+  dt$EMA_26 <- as.numeric(TTR::EMA(dt$close, n = window_slow))
+  macd <- TTR::MACD(dt$close, nFast = window_fast, nSlow = window_slow, nSig = window_sig)
+  dt$MACD <- as.numeric(macd[ ,"macd"]) 
+  dt$MACD_SIGNAL <- as.numeric(macd[ ,"signal"]) 
+}
+
+# Rolling volatility 30 jours
+if ("PRICE_CHANGE" %in% names(dt)) {
+  dt$VOLATILITY_30D <- as.numeric(zoo::rollapply(dt$PRICE_CHANGE, width = window_vol30d, FUN = sd, align = "right", fill = NA, na.rm = TRUE))
+  dt$PRICE_VOLATILITY_30D <- dt$VOLATILITY_30D
+}
+
+# VOLUME_SMA
+if ("volume" %in% names(dt)) {
+  dt$VOLUME_SMA <- as.numeric(TTR::SMA(dt$volume, n = window_short))
+}
+
+# Ratios
+if (all(c("high","low","close") %in% names(dt))) {
+  dt$HIGH_LOW_RATIO <- (dt$high - dt$low) / dt$close
+}
+if (all(c("close","open") %in% names(dt))) {
+  dt$CLOSE_OPEN_RATIO <- dt$close/dt$open - 1
+}
+
+# Stochastique
+if (all(c("high","low","close") %in% names(dt))) {
+  st <- suppressWarnings(TTR::stoch(cbind(dt$high, dt$low, dt$close)))
+  if (!is.null(st)) {
+    dt$STOCH_K <- as.numeric(st[,"fastK"]) * 100
+    dt$STOCH_D <- as.numeric(st[,"fastD"]) * 100
+  }
+}
+
+cat("Prétraitement terminé.\n")
+```
+
+---
+
+# 🎬 Acte 1 — Le contexte : "Une décennie de Bitcoin"
+
+**Message:** Bitcoin est passé d'un actif marginal à un marché hautement volatil et liquide.
+
+## Statistiques globales
+
+```{r acte1-stats}
+#| label: acte1-stats
+
+stopifnot(all(c("datetime","close") %in% names(dt)))
+
+rng <- range(dt$datetime, na.rm = TRUE)
+n_hours <- sum(!is.na(dt$datetime))
+price_min <- min(dt$close, na.rm = TRUE)
+price_median <- median(dt$close, na.rm = TRUE)
+price_max <- max(dt$close, na.rm = TRUE)
+vol_total <- if ("volume" %in% names(dt)) sum(dt$volume, na.rm = TRUE) else NA_real_
+
+tibble(
+  Métrique = c("Période début", "Période fin", "Heures totales", "Prix min", "Prix médian", "Prix max", "Volume total"),
+  Valeur = c(
+    format(rng[1]),
+    format(rng[2]),
+    prettyNum(n_hours, big.mark = " "),
+    prettyNum(round(price_min, 2), big.mark = " "),
+    prettyNum(round(price_median, 2), big.mark = " "),
+    prettyNum(round(price_max, 2), big.mark = " "),
+    if (!is.na(vol_total)) prettyNum(round(vol_total, 0), big.mark = " ") else "N/A"
+  )
+) %>% kable()
+```
+
+## Visualisations
+
+```{r acte1-plots}
+#| label: acte1-plots
+#| fig-height: 8
+
+p1 <- ggplot(dt, aes(x = datetime, y = close)) +
+  geom_line(color = "#2C7FB8", linewidth = 0.3) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Prix horaire du Bitcoin (CLOSE)", x = "Date", y = "Prix (USD)") +
+  theme_minimal()
+
+p2 <- ggplot(dt, aes(x = close)) +
+  geom_histogram(bins = 60, fill = "#7FCDBB", color = "grey30") +
+  scale_x_continuous(labels = scales::comma) +
+  labs(title = "Distribution des prix (CLOSE)", x = "Prix (USD)", y = "Fréquence") +
+  theme_minimal()
+
+p1 / p2
+```
+
+**Conclusion:** La croissance n'est pas linéaire → phases d'explosion et de stagnation.
+
+---
+
+# 🎬 Acte 2 — La volatilité : l'ADN du Bitcoin
+
+**Message:** La volatilité est une constante, mais son intensité change selon les périodes.
+
+## Statistiques
+
+```{r acte2-stats}
+#| label: acte2-stats
+
+stats_vol <- list()
+
+if ("ATR" %in% names(dt)) {
+  stats_vol$ATR_moyen <- mean(dt$ATR, na.rm = TRUE)
+  stats_vol$ATR_max <- max(dt$ATR, na.rm = TRUE)
+}
+
+if ("VOLATILITY_30D" %in% names(dt)) {
+  stats_vol$VOL30D_moyen <- mean(dt$VOLATILITY_30D, na.rm = TRUE)
+  stats_vol$VOL30D_max <- max(dt$VOLATILITY_30D, na.rm = TRUE)
+  
+  if ("datetime" %in% names(dt)) {
+    dt_clean <- dt %>% filter(!is.na(VOLATILITY_30D), !is.na(datetime))
+    mid_date <- median(dt_clean$datetime, na.rm = TRUE)
+    early <- dt_clean %>% filter(datetime < mid_date)
+    recent <- dt_clean %>% filter(datetime >= mid_date)
+    stats_vol$VOL_early <- mean(early$VOLATILITY_30D, na.rm = TRUE)
+    stats_vol$VOL_recent <- mean(recent$VOLATILITY_30D, na.rm = TRUE)
+  }
+}
+
+as_tibble(stats_vol) %>%
+  pivot_longer(everything(), names_to = "Métrique", values_to = "Valeur") %>%
+  mutate(Valeur = signif(Valeur, 4)) %>%
+  kable()
+```
+
+## Visualisations
+
+```{r acte2-plots}
+#| label: acte2-plots
+#| fig-height: 12
+
+plots <- list()
+
+if ("VOLATILITY_30D" %in% names(dt) && "datetime" %in% names(dt)) {
+  dt_clean <- dt %>% filter(!is.na(VOLATILITY_30D), !is.na(datetime))
+  
+  plots$p1 <- ggplot(dt_clean, aes(x = datetime, y = VOLATILITY_30D)) +
+    geom_line(color = "#E31A1C", linewidth = 0.4) +
+    labs(title = "Volatilité 30 jours (rolling SD)", x = "Date", y = "Volatilité") +
+    theme_minimal()
+  
+  dt_clean <- dt_clean %>% mutate(year = lubridate::year(datetime))
+  plots$p2 <- ggplot(dt_clean, aes(x = factor(year), y = VOLATILITY_30D)) +
+    geom_boxplot(fill = "#FF7F00", alpha = 0.7) +
+    labs(title = "Distribution volatilité par année", x = "Année", y = "Volatilité 30D") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  plots$p3 <- ggplot(dt_clean, aes(x = VOLATILITY_30D)) +
+    geom_histogram(bins = 50, fill = "#FB9A99", color = "grey30") +
+    labs(title = "Distribution VOLATILITY_30D", x = "Volatilité", y = "Fréquence") +
+    theme_minimal()
+  
+  wrap_plots(plots, ncol = 1)
+}
+```
+
+**Conclusion:** Le marché mûrit, mais reste instable → opportunité & risque.
+
+---
+
+# 🎬 Acte 3 — Le volume : quand le marché s'emballe
+
+**Message:** Le volume raconte l'histoire des crises et des bull runs.
+
+## Statistiques
+
+```{r acte3-stats}
+#| label: acte3-stats
+
+if ("volume" %in% names(dt)) {
+  vol_stats <- tibble(
+    Métrique = c("Volume moyen", "Volume médian", "Top 1% (quantile 99%)"),
+    Valeur = c(
+      prettyNum(round(mean(dt$volume, na.rm = TRUE), 0), big.mark = " "),
+      prettyNum(round(median(dt$volume, na.rm = TRUE), 0), big.mark = " "),
+      prettyNum(round(quantile(dt$volume, 0.99, na.rm = TRUE), 0), big.mark = " ")
+    )
+  )
+  
+  if ("PRICE_CHANGE" %in% names(dt)) {
+    dt_clean <- dt %>% filter(!is.na(volume), !is.na(PRICE_CHANGE))
+    if (nrow(dt_clean) > 2) {
+      corr <- cor(dt_clean$volume, abs(dt_clean$PRICE_CHANGE), use = "complete.obs")
+      vol_stats <- vol_stats %>% add_row(
+        Métrique = "Corrélation VOLUME ↔ |PRICE_CHANGE|",
+        Valeur = as.character(signif(corr, 3))
+      )
+    }
+  }
+  
+  vol_stats %>% kable()
+}
+```
+
+## Visualisations
+
+```{r acte3-plots}
+#| label: acte3-plots
+#| fig-height: 12
+
+if ("volume" %in% names(dt) && "datetime" %in% names(dt)) {
+  dt_clean <- dt %>% filter(!is.na(volume), !is.na(datetime))
+  
+  p1 <- ggplot(dt_clean, aes(x = datetime, y = volume)) +
+    geom_line(color = "#1F78B4", linewidth = 0.3) +
+    scale_y_continuous(labels = scales::comma) +
+    labs(title = "Volume horaire", x = "Date", y = "Volume") +
+    theme_minimal()
+  
+  p2 <- NULL
+  if ("PRICE_CHANGE" %in% names(dt)) {
+    dt_clean2 <- dt_clean %>% filter(!is.na(PRICE_CHANGE)) %>%
+      mutate(abs_change = abs(PRICE_CHANGE))
+    p2 <- ggplot(dt_clean2 %>% sample_n(min(10000, nrow(dt_clean2))), 
+                 aes(x = volume, y = abs_change)) +
+      geom_point(alpha = 0.2, color = "#A6CEE3") +
+      scale_x_continuous(labels = scales::comma) +
+      labs(title = "Volume vs |PRICE_CHANGE|", x = "Volume", y = "|Variation|") +
+      theme_minimal()
+  }
+  
+  if (!is.null(p2)) {
+    p1 / p2
+  } else {
+    p1
+  }
+}
+```
+
+**Conclusion:** Les grands mouvements de prix sont presque toujours accompagnés de volumes anormaux.
+
+---
+
+# 🎬 Acte 4 — Momentum & psychologie
+
+**Message:** Les indicateurs traduisent les émotions du marché.
+
+## Statistiques
+
+```{r acte4-stats}
+#| label: acte4-stats
+
+if ("RSI" %in% names(dt)) {
+  tibble(
+    Métrique = c("RSI moyen", "% temps RSI > 70 (surachat)", "% temps RSI < 30 (survente)"),
+    Valeur = c(
+      signif(mean(dt$RSI, na.rm = TRUE), 4),
+      paste0(signif(mean(dt$RSI > 70, na.rm = TRUE) * 100, 3), "%"),
+      paste0(signif(mean(dt$RSI < 30, na.rm = TRUE) * 100, 3), "%")
+    )
+  ) %>% kable()
+}
+```
+
+## Visualisations
+
+```{r acte4-plots}
+#| label: acte4-plots
+#| fig-height: 12
+
+plots <- list()
+
+if ("RSI" %in% names(dt) && "datetime" %in% names(dt)) {
+  dt_clean <- dt %>% filter(!is.na(RSI), !is.na(datetime))
+  
+  plots$p1 <- ggplot(dt_clean, aes(x = datetime, y = RSI)) +
+    geom_line(color = "#33A02C", linewidth = 0.3) +
+    geom_hline(yintercept = 70, color = "red", linetype = "dashed") +
+    geom_hline(yintercept = 30, color = "blue", linetype = "dashed") +
+    labs(title = "RSI avec seuils 30/70", x = "Date", y = "RSI") +
+    theme_minimal()
+  
+  plots$p2 <- ggplot(dt_clean, aes(x = RSI)) +
+    geom_histogram(bins = 50, fill = "#B2DF8A", color = "grey30") +
+    labs(title = "Distribution RSI", x = "RSI", y = "Fréquence") +
+    theme_minimal()
+}
+
+if (all(c("STOCH_K","STOCH_D","datetime") %in% names(dt))) {
+  dt_clean <- dt %>% filter(!is.na(STOCH_K), !is.na(STOCH_D), !is.na(datetime))
+  plots$p3 <- ggplot(dt_clean, aes(x = datetime)) +
+    geom_line(aes(y = STOCH_K), color = "#E31A1C", linewidth = 0.3) +
+    geom_line(aes(y = STOCH_D), color = "#1F78B4", linewidth = 0.3) +
+    labs(title = "Stochastique K (rouge) & D (bleu)", x = "Date", y = "Stoch") +
+    theme_minimal()
+}
+
+if (length(plots) > 0) wrap_plots(plots, ncol = 1)
+```
+
+**Conclusion:** Le marché passe plus de temps en zone extrême qu'on ne l'imagine.
+
+---
+
+# 🎬 Acte 5 — Tendances & régimes
+
+**Message:** Bitcoin alterne entre tendance et range.
+
+## Statistiques
+
+```{r acte5-stats}
+#| label: acte5-stats
+
+stats_list <- list()
+
+if (all(c("close","SMA_20") %in% names(dt))) {
+  dt_clean <- dt %>% filter(!is.na(close), !is.na(SMA_20))
+  stats_list$pct_above_sma <- paste0(signif(mean(dt_clean$close > dt_clean$SMA_20) * 100, 3), "%")
+}
+
+if (all(c("EMA_12","EMA_26") %in% names(dt))) {
+  dt_clean <- dt %>% filter(!is.na(EMA_12), !is.na(EMA_26))
+  stats_list$pct_ema_cross <- paste0(signif(mean(dt_clean$EMA_12 > dt_clean$EMA_26) * 100, 3), "%")
+}
+
+if (length(stats_list) > 0) {
+  tibble(
+    Métrique = c("% temps CLOSE > SMA_20", "% temps EMA_12 > EMA_26"),
+    Valeur = unlist(stats_list)
+  ) %>% kable()
+}
+```
+
+## Visualisations
+
+```{r acte5-plots}
+#| label: acte5-plots
+#| fig-height: 12
+
+plots <- list()
+
+if (all(c("close","SMA_20","datetime") %in% names(dt))) {
+  dt_clean <- dt %>% filter(!is.na(close), !is.na(SMA_20), !is.na(datetime))
+  plots$p1 <- ggplot(dt_clean, aes(x = datetime)) +
+    geom_line(aes(y = close), color = "#2C7FB8", linewidth = 0.3) +
+    geom_line(aes(y = SMA_20), color = "#E31A1C", linewidth = 0.4) +
+    scale_y_continuous(labels = scales::comma) +
+    labs(title = "Prix (bleu) + SMA_20 (rouge)", x = "Date", y = "Prix") +
+    theme_minimal()
+}
+
+if (all(c("EMA_12","EMA_26","datetime") %in% names(dt))) {
+  dt_clean <- dt %>% filter(!is.na(EMA_12), !is.na(EMA_26), !is.na(datetime))
+  plots$p2 <- ggplot(dt_clean, aes(x = datetime)) +
+    geom_line(aes(y = EMA_12), color = "#FF7F00", linewidth = 0.3) +
+    geom_line(aes(y = EMA_26), color = "#6A3D9A", linewidth = 0.3) +
+    scale_y_continuous(labels = scales::comma) +
+    labs(title = "EMA_12 (orange) vs EMA_26 (violet)", x = "Date", y = "EMA") +
+    theme_minimal()
+}
+
+if (all(c("MACD","MACD_SIGNAL","datetime") %in% names(dt))) {
+  dt_clean <- dt %>% filter(!is.na(MACD), !is.na(MACD_SIGNAL), !is.na(datetime))
+  plots$p3 <- ggplot(dt_clean, aes(x = datetime)) +
+    geom_line(aes(y = MACD), color = "#1F78B4", linewidth = 0.3) +
+    geom_line(aes(y = MACD_SIGNAL), color = "#E31A1C", linewidth = 0.3) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+    labs(title = "MACD (bleu) & Signal (rouge)", x = "Date", y = "MACD") +
+    theme_minimal()
+}
+
+if (length(plots) > 0) wrap_plots(plots, ncol = 1)
+```
+
+**Conclusion:** Les tendances existent, mais sont souvent courtes et violentes.
+
+---
+
+# 🎬 Acte 6 — Ratios & micro-mouvements
+
+**Message:** À l'échelle horaire, le marché est très bruité.
+
+## Statistiques
+
+```{r acte6-stats}
+#| label: acte6-stats
+
+stats_list <- list()
+if ("HIGH_LOW_RATIO" %in% names(dt)) stats_list$HLR_mean <- signif(mean(dt$HIGH_LOW_RATIO, na.rm = TRUE), 4)
+if ("CLOSE_OPEN_RATIO" %in% names(dt)) stats_list$COR_mean <- signif(mean(dt$CLOSE_OPEN_RATIO, na.rm = TRUE), 4)
+if ("PRICE_CHANGE" %in% names(dt)) stats_list$PC_mean <- signif(mean(dt$PRICE_CHANGE, na.rm = TRUE), 4)
+
+if (length(stats_list) > 0) {
+  tibble(
+    Métrique = c("HIGH_LOW_RATIO moyen", "CLOSE_OPEN_RATIO moyen", "PRICE_CHANGE moyen"),
+    Valeur = unlist(stats_list)
+  ) %>% kable()
+}
+```
+
+## Visualisations
+
+```{r acte6-plots}
+#| label: acte6-plots
+#| fig-height: 12
+
+plots <- list()
+
+if ("HIGH_LOW_RATIO" %in% names(dt)) {
+  dt_clean <- dt %>% filter(!is.na(HIGH_LOW_RATIO))
+  plots$p1 <- ggplot(dt_clean, aes(x = HIGH_LOW_RATIO)) +
+    geom_histogram(bins = 50, fill = "#CAB2D6", color = "grey30") +
+    labs(title = "Distribution HIGH_LOW_RATIO", x = "Ratio", y = "Fréquence") +
+    theme_minimal()
+}
+
+if ("PRICE_CHANGE" %in% names(dt)) {
+  dt_clean <- dt %>% filter(!is.na(PRICE_CHANGE), abs(PRICE_CHANGE) < 0.2)
+  plots$p2 <- ggplot(dt_clean, aes(x = PRICE_CHANGE)) +
+    geom_histogram(bins = 60, fill = "#FDBF6F", color = "grey30") +
+    labs(title = "Distribution PRICE_CHANGE (±20%)", x = "Variation", y = "Fréquence") +
+    theme_minimal()
+}
+
+# Heatmap corrélation
+numeric_cols <- intersect(names(dt), c("close","volume","ATR","RSI","VOLATILITY_30D","PRICE_CHANGE","HIGH_LOW_RATIO","CLOSE_OPEN_RATIO"))
+if (length(numeric_cols) >= 2) {
+  dt_cor <- dt %>% select(all_of(numeric_cols)) %>% na.omit()
+  if (nrow(dt_cor) > 10) {
+    cor_mat <- cor(dt_cor, use = "complete.obs")
+    cor_tidy <- as.data.frame(as.table(cor_mat))
+    names(cor_tidy) <- c("Var1","Var2","Correlation")
+    
+    plots$p3 <- ggplot(cor_tidy, aes(x = Var1, y = Var2, fill = Correlation)) +
+      geom_tile() +
+      scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+      labs(title = "Heatmap corrélation features", x = "", y = "") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  }
+}
+
+if (length(plots) > 0) wrap_plots(plots, ncol = 1)
+```
+
+**Conclusion:** Le bruit domine, d'où l'importance du ML et du risk management.
+
+---
+
+# 🎬 Acte 7 — Synthèse finale
+
+## Tableau récapitulatif
+
+```{r acte7-summary}
+#| label: acte7-summary
+
+summary_stats <- data.frame(
+  Dimension = c("Prix", "Volatilité", "Volume", "Momentum"),
+  Indicateur_clé = c("CLOSE", "VOLATILITY_30D", "VOLUME", "RSI"),
+  Observation = c(
+    "Croissance non linéaire avec phases d'explosion et de stagnation",
+    "Fluctuante mais constante, le marché mûrit lentement",
+    "Corrélé aux grands mouvements de prix, indicateur de crises/bull runs",
+    "Le marché passe du temps en zones extrêmes (surachat/survente)"
+  )
+)
+
+summary_stats %>% kable()
+```
+
+## Conclusion
+
+Bitcoin est un marché **hautement non-stationnaire, émotionnel et volatil**, mais **riche en signaux exploitables**.
+
+### Points clés
+
+- **Prix** : croissance explosive avec phases de stagnation
+- **Volatilité** : constante mais fluctuante, le marché mûrit lentement
+- **Volume** : corrélé aux grands mouvements, indicateur de crises/bull runs
+- **Momentum** : marché passe du temps en zones extrêmes (RSI)
+- **Tendances** : courtes et violentes, alternance tendance/range
+- **Ratios** : le bruit domine à l'échelle horaire → importance du ML et risk management
+
+### Prochaines étapes
+
+1. **Export** : `ggsave()` pour sauvegarder les visualisations
+2. **Modélisation ML** : Random Forest, XGBoost, LSTM
+3. **Backtesting** : stratégies de trading
+4. **Séries temporelles** : ARIMA, Prophet
+5. **Publication** : ce document Quarto peut être rendu en HTML/PDF/DOCX
+
+---
+
+## Informations techniques
+
+**Stack utilisée :**
+
+- `tidyverse` (dplyr, ggplot2, readr)
+- `lubridate` (parsing dates)
+- `TTR` (indicateurs techniques)
+- `zoo` (rolling windows)
+- `patchwork` (composition de plots)
+- `DT` (tables interactives)
+- `Quarto` (publication scientifique)
+
+**Rendu du document :**
+
+```bash
+# HTML (par défaut)
+quarto render bitcoin_storytelling.qmd
+
+# PDF (nécessite LaTeX)
+quarto render bitcoin_storytelling.qmd --to pdf
+
+# DOCX (Word)
+quarto render bitcoin_storytelling.qmd --to docx
+```
+
+---
+
+*Document généré le `r Sys.Date()` avec Quarto & R.*

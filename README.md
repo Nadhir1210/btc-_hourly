@@ -1,79 +1,42 @@
-# BTC Hourly — Analysis (R / Python / Quarto)
+# Projet R (Windows) — environnement reproductible avec renv
 
-Projet d’analyse de données **BTC hourly OHLCV + indicateurs** avec :
-- un pipeline **R** (scripts + outputs),
-- un notebook **Python**,
-- des rapports **Quarto** (Python et R).
+Ce dossier contient `btc_hourly_ohclv_ta.csv` et une config d’environnement R reproductible via **renv**.
 
-## Données
+## Prérequis (Windows)
 
-- Fichier principal : `data/btc_hourly_ohclv_ta.csv`
-- Colonne temps : `DATETIME`
-- Variable étudiée : `Q = CLOSE`
+1) Installer R (64-bit) : https://cran.r-project.org/bin/windows/base/
 
-## Exécuter l’analyse en R (pipeline)
+2) (Optionnel mais conseillé) Installer Rtools si tu compiles des packages : https://cran.r-project.org/bin/windows/Rtools/
 
-Pré-requis : R installé (ex: R 4.5+) + `renv` déjà initialisé dans ce repo.
-
-1) Restaurer l’environnement R (si besoin)
-
-```r
-renv::restore()
-```
-
-2) Lancer toutes les tâches R (Task 1 + Task 2) et générer les fichiers dans `outputs/`
-
-```bash
-"C:\Program Files\R\R-4.5.2\bin\Rscript.exe" run_all.R
-```
-
-> Si ton Rscript est ailleurs, adapte le chemin.
-
-## Notebook Python (Task 1 + Task 2)
-
-- Notebook : `btc_analysis.ipynb`
-- Il lit `data/btc_hourly_ohclv_ta.csv` et affiche les tables/plots dans le notebook.
-
-Dépendances Python typiques : `numpy`, `pandas`, `matplotlib`, `seaborn`, `scipy`.
-
-## Rapports Quarto
-
-### 1) Rapport Quarto Python (exécute le code)
-
-- Source : `btc_python_report.qmd`
-
-Exécution (PowerShell) :
+3) Vérifier que `Rscript` est accessible (nouveau terminal) :
 
 ```powershell
-cd "C:\Users\Nadhir\Desktop\btc _hourly"
-$env:QUARTO_PYTHON="C:\Users\Nadhir\Desktop\btc _hourly\.venv\Scripts\python.exe"
-quarto preview btc_python_report.qmd
+where Rscript
+Rscript --version
 ```
 
-Ou rendu simple :
+## Initialiser / restaurer l’environnement
+
+Depuis ce dossier :
 
 ```powershell
-$env:QUARTO_PYTHON="C:\Users\Nadhir\Desktop\btc _hourly\.venv\Scripts\python.exe"
-quarto render btc_python_report.qmd
+Set-Location -LiteralPath "D:\projet   R"
+Rscript .\setup.R
 ```
 
-### 2) Rapport Quarto R (exécute le code)
+- Si c’est la première fois, `setup.R` va installer `renv`, initialiser le projet, puis installer les packages.
+- Ensuite tu peux (re)lancer `setup.R` quand tu veux pour restaurer/synchroniser.
 
-- Source : `btc_r_report.qmd`
+## Lancer un exemple d’analyse
 
 ```powershell
-cd "C:\Users\Nadhir\Desktop\btc _hourly"
-quarto preview btc_r_report.qmd
+Set-Location -LiteralPath "D:\projet   R"
+Rscript .\analysis.R
 ```
 
-### 3) Rapport Quarto basé sur les outputs (sans recalcul)
-
-- Source : `elbe_report.qmd`
-- HTML : `elbe_report.html`
-
-Ce rapport lit les fichiers déjà générés dans `outputs/`.
+L’exemple lit le CSV, affiche un résumé et calcule quelques stats simples.
 
 ## Notes
 
-- Certains fichiers HTML peuvent être ignorés par `.gitignore`.
-- Sur Windows, Git peut afficher un warning `LF` → `CRLF` sur les notebooks : c’est normal.
+- Le fichier `renv.lock` (généré après init) fige les versions de packages.
+- Le dossier `renv/` est un dossier de config du projet (à versionner), et la bibliothèque locale se met dans `renv/library/` (souvent ignorée en git).

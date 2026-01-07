@@ -1,21 +1,14 @@
-# R / renv
 .Rhistory
 .RData
 .Ruserdata
 
-# renv: keep lockfile + activation scripts, ignore installed libraries/cache
+# renv
 renv/library/
-renv/staging/
 renv/python/
-renv/local/
-renv/cache/
+renv/staging/
 
-# Quarto / R Markdown outputs
-*_cache/
-*_files/
-*.html
-*.pdf
+# RStudio
+.Rproj.user/
 
-# Data / outputs (optional)
-# Uncomment if you don't want to commit generated outputs:
-# outputs/
+# Misc
+*.log
