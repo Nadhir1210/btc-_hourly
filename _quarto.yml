@@ -1,0 +1,21 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: "Bitcoin Hourly Analysis"
+  navbar:
+    left:
+      - text: "Presentation"
+        href: bitcoin_presentation.html
+      - text: "Storytelling"
+        href: bitcoin_storytelling.html
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+
+execute:
+  freeze: auto

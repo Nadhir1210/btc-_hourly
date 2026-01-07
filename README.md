@@ -40,3 +40,25 @@ L’exemple lit le CSV, affiche un résumé et calcule quelques stats simples.
 
 - Le fichier `renv.lock` (généré après init) fige les versions de packages.
 - Le dossier `renv/` est un dossier de config du projet (à versionner), et la bibliothèque locale se met dans `renv/library/` (souvent ignorée en git).
+
+## Publication sur GitHub Pages
+
+Le projet est configuré pour publier automatiquement sur GitHub Pages via GitHub Actions.
+
+### Publication automatique
+
+À chaque `git push` sur la branche `main`, les documents Quarto sont automatiquement rendus et publiés.
+
+**URL du site** : https://nadhir1210.github.io/btc-_hourly/
+
+### Publication manuelle (depuis local)
+
+```powershell
+quarto publish gh-pages
+```
+
+### Activer GitHub Pages (première fois)
+
+1. Va sur https://github.com/Nadhir1210/btc-_hourly/settings/pages
+2. Sous "Build and deployment", sélectionne **Source: GitHub Actions**
+3. Pousse tes changements et le workflow se lancera automatiquement
